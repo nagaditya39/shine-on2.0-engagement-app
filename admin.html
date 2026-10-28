@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Event Admin</title>
+<style>
+:root{--bg:#0f172a;--card:#1e293b;--line:#334155;--fg:#f1f5f9;--mut:#94a3b8;--acc:#2dd4bf;--bad:#f87171;--warn:#f59e0b}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--fg);padding:16px}
+main{max-width:900px;margin:0 auto}
+h1{font-size:22px;margin:0 0 12px}h2{font-size:16px;margin:0 0 10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+input,select,textarea{font:inherit;background:#0b1222;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px;width:100%}
+textarea{min-height:70px}
+label{display:block;color:var(--mut);font-size:13px;margin:8px 0 3px}
+button{font:inherit;font-weight:600;border:1px solid var(--line);background:#0b1222;color:var(--fg);border-radius:8px;padding:7px 12px;cursor:pointer}
+button.p{background:var(--acc);color:#04211d;border-color:var(--acc)}
+button.d{color:var(--bad)}
+.pill{font-size:12px;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--mut)}
+.pill.open{color:#04211d;background:var(--acc);border-color:var(--acc)}
+.pill.live{color:var(--warn);border-color:var(--warn)}
+.mut{color:var(--mut)}
+.cm{display:flex;gap:8px;justify-content:space-between;border-top:1px solid var(--line);padding:6px 0}
+.cm.h{opacity:.4}
+#err{color:var(--bad);margin-bottom:8px}
+</style>
+</head>
+<body>
+<main>
+<h1>Event admin</h1>
+<div id="err"></div>
+<div class="card" id="top"></div>
+<div class="card">
+  <h2>New session</h2>
+  <div class="row"><div style="flex:1;min-width:140px"><label>Type</label><select id="kind"><option value="care">Care: safety moment ratings</option><option value="courage">Courage: pitch comments</option></select></div>
+  <div style="flex:3;min-width:220px"><label>Title (division / factory + topic)</label><input id="title"></div></div>
+  <label>Notes for the AI (what the story / pitch is about; never shown to phones)</label><textarea id="blurb"></textarea>
+  <div id="careOnly"><label>Rating statements, one per line (blank = 3 sensible defaults)</label><textarea id="qs"></textarea>
+  <label><input type="checkbox" id="ai" style="width:auto"> Let the AI write the statements from the notes (needs the laptop worker; defaults are used until it answers)</label></div>
+  <div style="margin-top:10px"><button class="p" id="create">Create session</button></div>
+</div>
+<div id="list"></div>
+<div class="card"><h2>After the event</h2><div class="row"><button id="export">Download all data (JSON)</button><button class="d" id="purge">Delete all data</button></div></div>
+</main>
+<script>
+const $=s=>document.querySelector(s);
+const esc=t=>String(t==null?'':t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let key=sessionStorage.getItem('ak')||'';
+async function api(path,method='GET',body){
+  const r=await fetch(path,{method,headers:{'Content-Type':'application/json','X-Admin-Key':key},body:body?JSON.stringify(body):undefined});
+  if(r.status===401){key=prompt('Admin password')||'';sessionStorage.setItem('ak',key);return api(path,method,body)}
+  if(!r.ok){let m='';try{m=(await r.json()).detail}catch(e){}$('#err').textContent=m||('Error '+r.status);setTimeout(()=>$('#err').textContent='',4000);throw new Error(m)}
+  return r.json();
+}
+let data=null, editing=null;
+async function load(){
+  if(editing)return;
+  try{data=await api('/api/admin/sessions');render()}catch(e){}
+}
+function render(){
+  const w=data.worker_age, wtxt=w==null?'never seen':(w<15?'online':Math.round(w)+'s ago');
+  $('#top').innerHTML=`<div class="row" style="justify-content:space-between"><div>Laptop worker: <span class="pill ${w!=null&&w<15?'open':''}">${wtxt}</span> <span class="mut">${data.pending_jobs} job(s) queued</span></div>
+  <div class="row"><span class="mut">Big screen:</span><button data-act="mode" data-m="live" class="${data.display_mode==='live'?'p':''}">Live session</button><button data-act="mode" data-m="overview" class="${data.display_mode==='overview'?'p':''}">Highlights</button><a href="/display" target="_blank" style="color:var(--acc)">open /display</a></div></div>`;
+  $('#list').innerHTML=data.sessions.slice().reverse().map(s=>{
+    const live=s.id===data.active_id, care=s.kind==='care';
+    const sum=s.summary?`<div class="card" style="background:#0b1222"><b>${esc(s.summary.headline)}</b><ul>${s.summary.points.map(p=>`<li>${esc(p)}</li>`).join('')}</ul></div>`:'';
+    return `<div class="card" data-id="${s.id}">
+      <div class="row" style="justify-content:space-between"><h2 style="margin:0">${esc(s.title)} <span class="pill">${s.kind}</span> <span class="pill ${s.status}">${s.status}</span> ${live?'<span class="pill live">on screen</span>':''}</h2>
+      <span class="mut">${care?s.n_responses+' responses':s.n_comments+' comments'}</span></div>
+      <div class="row" style="margin:10px 0">
+        <button class="p" data-act="status" data-s="open">Open</button><button data-act="status" data-s="closed">Close</button><button data-act="status" data-s="draft">Back to draft</button><button data-act="activate">Show on screen</button>
+        ${care?'':`<button class="p" data-act="summarize">Summarise comments</button><button data-act="manual">Write summary by hand</button><button data-act="comments">Moderate comments</button>`}
+        ${care?'<button data-act="editq">Edit statements</button>':''}
+        ${s.summary_state==='pending'?'<span class="pill live">summarising…</span>':''}${s.summary_state==='failed'?'<span class="pill" style="color:var(--bad)">summary failed</span>':''}
+      </div>
+      ${care?`<div class="mut">${s.questions.map((q,i)=>(i+1)+'. '+esc(q.text)).join('<br>')}</div>`:''}
+      ${sum}<div class="extra"></div></div>`;
+  }).join('');
+}
+document.addEventListener('click',async e=>{
+  const b=e.target.closest('button[data-act]'); if(!b)return;
+  const card=b.closest('[data-id]'), id=card&&card.dataset.id, act=b.dataset.act;
+  if(act==='mode')await api('/api/admin/display','POST',{mode:b.dataset.m});
+  if(act==='status')await api(`/api/admin/sessions/${id}/status`,'POST',{status:b.dataset.s});
+  if(act==='activate')await api(`/api/admin/sessions/${id}/activate`,'POST');
+  if(act==='summarize')await api(`/api/admin/sessions/${id}/summarize`,'POST');
+  if(act==='editq'){const s=data.sessions.find(x=>x.id==id);editing=id;
+    card.querySelector('.extra').innerHTML=`<textarea id="eq" style="min-height:110px">${esc(s.questions.map(q=>q.text).join('\n'))}</textarea><div class="row" style="margin-top:6px"><button class="p" data-act="saveq">Save</button><button data-act="cancel">Cancel</button></div><div class="mut">Only edit before opening: phones that already answered keep their old answers.</div>`;return}
+  if(act==='saveq'){await api(`/api/admin/sessions/${id}`,'PUT',{questions:$('#eq').value.split('\n')});editing=null}
+  if(act==='cancel'){editing=null}
+  if(act==='manual'){editing=id;const s=data.sessions.find(x=>x.id==id),m=s.summary||{headline:'',points:[]};
+    card.querySelector('.extra').innerHTML=`<label>Headline</label><input id="mh" value="${esc(m.headline)}"><label>Up to 4 bullet points, one per line</label><textarea id="mp">${esc(m.points.join('\n'))}</textarea><div class="row" style="margin-top:6px"><button class="p" data-act="savesum">Save and show</button><button data-act="cancel">Cancel</button></div>`;return}
+  if(act==='savesum'){await api(`/api/admin/sessions/${id}/summary`,'PUT',{headline:$('#mh').value,points:$('#mp').value.split('\n').filter(x=>x.trim()).slice(0,4)});editing=null}
+  if(act==='comments'){editing=id;const cs=await api(`/api/admin/sessions/${id}/comments`);
+    card.querySelector('.extra').innerHTML=cs.map(c=>`<div class="cm ${c.hidden?'h':''}"><span>${esc(c.text)}</span><button data-act="hide" data-c="${c.id}" data-h="${c.hidden?0:1}">${c.hidden?'Unhide':'Hide'}</button></div>`).join('')+`<div style="margin-top:8px"><button data-act="cancel">Close list</button></div>`;return}
+  if(act==='hide'){await api(`/api/admin/comments/${b.dataset.c}/hide?hidden=${b.dataset.h==='1'}`,'POST');b.closest('.cm').classList.toggle('h');b.textContent=b.dataset.h==='1'?'Unhide':'Hide';b.dataset.h=b.dataset.h==='1'?'0':'1';return}
+  load();
+});
+$('#kind').onchange=()=>$('#careOnly').style.display=$('#kind').value==='care'?'':'none';
+$('#create').onclick=async()=>{
+  if(!$('#title').value.trim())return;
+  await api('/api/admin/sessions','POST',{kind:$('#kind').value,title:$('#title').value,blurb:$('#blurb').value,questions:$('#qs').value.split('\n'),ai_questions:$('#ai').checked});
+  ['#title','#blurb','#qs'].forEach(s=>$(s).value='');load();
+};
+$('#export').onclick=async()=>{const d=await api('/api/admin/export');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(d,null,2)],{type:'application/json'}));a.download='event-data.json';a.click()};
+$('#purge').onclick=async()=>{if(prompt('Type DELETE to erase every session, rating and comment')==='DELETE'){await api('/api/admin/purge','POST',{confirm:'DELETE'});load()}};
+load();setInterval(load,4000);
+</script>
+</body>
+</html>
